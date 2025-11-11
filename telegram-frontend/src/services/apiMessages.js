@@ -39,5 +39,23 @@ export const sendMessage = async (messageData, token) => {
   });
   return res.data.data;
 };
+export const uploadMedia = async (formData, token) => {
+  // If you want to see the FormData content in console:
+  // console.log("formData", formData);
+
+  // POST to the messages upload route (mounted at /api/v1/messages/upload)
+  const res = await apiMessages.post("/upload", formData, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      // let axios set boundary; but explicitly setting content-type is OK too
+      "Content-Type": "multipart/form-data",
+    },
+  });
+
+  // *** RETURN res.data (not res.data.data) ***
+  // res.data for this endpoint is: { files: [ { url, type, name, size }, ... ] }
+  return res.data;
+};
+
 
 export default apiMessages;

@@ -1,86 +1,92 @@
-// src/features/chats/ChatWindow.jsx
 import styled from "styled-components";
 import { useEffect, useRef } from "react";
 import MessageInput from "./MessageInput";
 import { useChatWindow } from "./useChatWindow";
 
+/*
+  ChatWindow
+  - Renders messages saved in localMessages (from useChatWindow)
+  - Supports messages with m.media (array of { url, type, name, size })
+  - Keeps your styling exactly the same.
+*/
+
 export default function ChatWindow({ selectedChat }) {
   const { localMessages, handleSend } = useChatWindow(selectedChat);
   const messagesEndRef = useRef(null);
+const SERVER_URL = "http://localhost:8000";
+const resolveUrl = (url) => url.startsWith("http") ? url : `${SERVER_URL}${url.replace(/^\/uploads/, "")}`;
 
-  // 🔽 Scroll to bottom whenever new messages are added
+  // Scroll to bottom on new messages
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [localMessages]);
 
-  if (!selectedChat)
-    return <Empty>Select a chat to start messaging</Empty>;
+  if (!selectedChat) return <Empty>Select a chat to start messaging</Empty>;
 
   return (
     <Container>
-      {/* 🧭 Chat Header (Avatar + Name + Online/Seen Status) */}
+      {/* Header */}
       <Header>
-        <Avatar
-          src={selectedChat?.avatar || "/default-avatar.png"}
-          alt="avatar"
-        />
+        <Avatar src={selectedChat?.avatar || "/default-avatar.png"} alt="avatar" />
         <HeaderInfo>
           <ChatTitle>{selectedChat?.name || "Chat"}</ChatTitle>
-          <StatusText>
-            {selectedChat?.isOnline
-              ? "online"
-              : "last seen recently"}
-          </StatusText>
+          <StatusText>{selectedChat?.isOnline ? "online" : "last seen recently"}</StatusText>
         </HeaderInfo>
       </Header>
 
-      {/* 💬 Messages Section */}
+      {/* Messages */}
       <MessagesWrap>
         {localMessages.map((m) => (
           <MessageRow key={m._id} isSender={m.isMine}>
-            {/* 👤 Optional avatar (for receiver’s messages only) */}
-            {!m.isMine && (
-              <SmallAvatar
-                src={selectedChat?.avatar || "/default-avatar.png"}
-                alt="avatar"
-              />
-            )}
+            {!m.isMine && <SmallAvatar src={selectedChat?.avatar || "/default-avatar.png"} alt="avatar" />}
 
             <MessageBubble isSender={m.isMine}>
-              {m.text}
+              {/* Render media (if any) — uses your message model "media" */}
+              {m.media && m.media.length > 0 &&
+                m.media.map((file, i) =>
+                  file.type === "image" ? (
 
-              {/* 🕒 Time + Seen status (✓✓) below each message */}
+                    // If file.url is relative (starts with '/uploads/...') add server origin
+                    
+                   <FileImage key={i} src={resolveUrl(file.url)} alt={file.name} />
+
+                  ) : (
+                    <FileLink
+                      key={i}
+                      href={file.url.startsWith("http") ? file.url : `http://localhost:8000${file.url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      📎 {file.name}
+                    </FileLink>
+                  )
+                )}
+
+              {/* Render text part of the message */}
+              {m.text && <div>{m.text}</div>}
+
+              {/* Meta info (time and seen) */}
               <MetaInfo isSender={m.isMine}>
                 <TimeText>
-                  {new Date(m.createdAt || Date.now()).toLocaleTimeString([], {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+                  {new Date(m.createdAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </TimeText>
-                {m.isMine && (
-                  <SeenMark seen={m.seen}>
-                    {m.seen ? "✓✓" : "✓"}
-                  </SeenMark>
-                )}
+                {m.isMine && <SeenMark seen={m.seen}>{m.seen ? "✓✓" : "✓"}</SeenMark>}
               </MetaInfo>
             </MessageBubble>
           </MessageRow>
         ))}
-
-        {/* 👇 Dummy div used to scroll into view */}
         <div ref={messagesEndRef} />
       </MessagesWrap>
 
-      {/* ✍️ Message Input (already handled) */}
+      {/* Message input — unchanged styling */}
       <MessageInput onSend={handleSend} />
     </Container>
   );
 }
 
-// ---------------- styled-components ----------------
-
+// ---------------- Styled Components ----------------
 const Container = styled.div`
   display: flex;
   flex-direction: column;
@@ -88,7 +94,6 @@ const Container = styled.div`
   height: 100vh;
 `;
 
-// 🧭 Header Styles
 const Header = styled.div`
   background: #0e1621;
   border-bottom: 1px solid #1e2a36;
@@ -122,7 +127,6 @@ const StatusText = styled.span`
   color: #9aa5b1;
 `;
 
-// 💬 Messages Section
 const MessagesWrap = styled.div`
   flex: 1;
   overflow-y: auto;
@@ -135,8 +139,7 @@ const MessagesWrap = styled.div`
 const MessageRow = styled.div`
   display: flex;
   align-items: flex-end;
-  justify-content: ${({ isSender }) =>
-    isSender ? "flex-end" : "flex-start"};
+  justify-content: ${({ isSender }) => (isSender ? "flex-end" : "flex-start")};
   gap: 6px;
 `;
 
@@ -147,20 +150,16 @@ const SmallAvatar = styled.img`
   object-fit: cover;
 `;
 
-// 🗨️ Message Bubble with Telegram-like tail
 const MessageBubble = styled.div`
   position: relative;
-  align-self: ${({ isSender }) =>
-    isSender ? "flex-end" : "flex-start"};
-  background: ${({ isSender }) =>
-    isSender ? "#2b5278" : "#182533"};
+  align-self: ${({ isSender }) => (isSender ? "flex-end" : "flex-start")};
+  background: ${({ isSender }) => (isSender ? "#2b5278" : "#182533")};
   color: #fff;
   border-radius: 16px;
   padding: 10px 14px;
   max-width: 70%;
   word-wrap: break-word;
 
-  /* Tail-like triangle for Telegram-style bubbles */
   &::after {
     content: "";
     position: absolute;
@@ -168,22 +167,18 @@ const MessageBubble = styled.div`
     ${({ isSender }) => (isSender ? "right: -6px;" : "left: -6px;")}
     width: 12px;
     height: 12px;
-    background: ${({ isSender }) =>
-      isSender ? "#2b5278" : "#182533"};
+    background: ${({ isSender }) => (isSender ? "#2b5278" : "#182533")};
     clip-path: polygon(0 100%, 100% 100%, 100% 0);
   }
 `;
 
-// 🕒 Timestamp and Seen checkmarks
 const MetaInfo = styled.div`
   display: flex;
-  justify-content: ${({ isSender }) =>
-    isSender ? "flex-end" : "flex-start"};
+  justify-content: ${({ isSender }) => (isSender ? "flex-end" : "flex-start")};
   align-items: center;
   margin-top: 4px;
   font-size: 0.75rem;
-  color: ${({ isSender }) =>
-    isSender ? "#d0e4ff" : "#9aa5b1"};
+  color: ${({ isSender }) => (isSender ? "#d0e4ff" : "#9aa5b1")};
   gap: 4px;
 `;
 
@@ -200,4 +195,16 @@ const Empty = styled.div`
   display: flex;
   justify-content: center;
   align-items: center;
+`;
+
+const FileImage = styled.img`
+  max-width: 200px;
+  border-radius: 10px;
+  margin-bottom: 5px;
+`;
+
+const FileLink = styled.a`
+  color: #a9c4ff;
+  text-decoration: underline;
+  word-break: break-all;
 `;

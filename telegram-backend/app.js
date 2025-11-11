@@ -30,6 +30,10 @@ app.use(express.json({ limit: "10kb" }));
 
 // 3️⃣ Serve static files (for profile pictures)
 app.use(express.static("public"));
+import path from "path";
+
+// Serve uploaded files
+app.use( express.static(path.join(process.cwd(), "/uploads")));
 
 // 4️⃣ Mount Routers
 app.use("/api/v1/auth", authRouter);
