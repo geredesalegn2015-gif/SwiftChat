@@ -1,7 +1,7 @@
 # Node.js dependencies
 telegram-backend/node_modules/
 telegram-frontend/node_modules/
-
+telegram-backend/uploads/
 # Build output
 dist/
 
