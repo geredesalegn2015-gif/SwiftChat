@@ -1,33 +1,66 @@
+// ChatWindow.jsx
 import styled from "styled-components";
-import { useEffect, useRef } from "react";
+import { useRef, useEffect } from "react";
 import MessageInput from "./MessageInput";
 import { useChatWindow } from "./useChatWindow";
+import { useAuth } from "../../context/useAuth";
+import { useMessageSeenObserver } from "./useMessageSeenObserver";
 
-/*
-  ChatWindow
-  - Renders messages saved in localMessages (from useChatWindow)
-  - Supports messages with m.media (array of { url, type, name, size })
-  - Keeps your styling exactly the same.
-*/
-
+/**
+ * ChatWindow Component
+ * - Displays chat messages
+ * - Auto-scrolls to bottom on new messages
+ * - Marks messages as seen when visible
+ * - Uses WebSocket for real-time send, receive, and seen status
+ */
 export default function ChatWindow({ selectedChat }) {
-  const { localMessages, handleSend } = useChatWindow(selectedChat);
-  const messagesEndRef = useRef(null);
-const SERVER_URL = "http://localhost:8000";
-const resolveUrl = (url) => url.startsWith("http") ? url : `${SERVER_URL}${url.replace(/^\/uploads/, "")}`;
+  const { user: currentUser } = useAuth();
 
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [localMessages]);
+  // useChatWindow hook handles socket-based message fetching and sending
+  const { localMessages, handleSend, setLocalMessages } = useChatWindow(selectedChat);
+
+  const messagesEndRef = useRef(null);
+
+  // Hook that observes message bubbles and emits "markMessageSeen" via socket
+  useMessageSeenObserver(selectedChat, localMessages, currentUser, setLocalMessages);
+
+  // Scroll only when *new* messages arrive (not on initial chat switch)
+const hasMounted = useRef(false);
+
+useEffect(() => {
+  if (!messagesEndRef.current) return;
+
+  if (!hasMounted.current) {
+    // Skip scroll on first load (when user opens a chat)
+    hasMounted.current = true;
+    return;
+  }
+
+  // Scroll to bottom when new messages are appended
+  messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+}, [localMessages.length]);
+
 
   if (!selectedChat) return <Empty>Select a chat to start messaging</Empty>;
 
+  const SERVER_URL = "http://localhost:8000";
+
+  const resolveUrl = (url) =>
+    url.startsWith("http") ? url : `${SERVER_URL}${url.replace(/^\/uploads/, "")}`;
+
+  // Check if the other participant has seen the message
+  const hasOtherParticipantSeenMessage = (message) => {
+    if (!Array.isArray(message.seenBy)) return false;
+    if (selectedChat.type === "private") {
+      const other = selectedChat.participants.find((p) => p._id !== currentUser._id);
+      return message.seenBy.includes(other?._id);
+    }
+    return message.seenBy.length > 0;
+  };
+
   return (
     <Container>
-      {/* Header */}
+      {/* Chat header */}
       <Header>
         <Avatar src={selectedChat?.avatar || "/default-avatar.png"} alt="avatar" />
         <HeaderInfo>
@@ -36,26 +69,30 @@ const resolveUrl = (url) => url.startsWith("http") ? url : `${SERVER_URL}${url.r
         </HeaderInfo>
       </Header>
 
-      {/* Messages */}
+      {/* Chat body */}
       <MessagesWrap>
         {localMessages.map((m) => (
           <MessageRow key={m._id} isSender={m.isMine}>
-            {!m.isMine && <SmallAvatar src={selectedChat?.avatar || "/default-avatar.png"} alt="avatar" />}
+            {!m.isMine && (
+              <SmallAvatar src={selectedChat?.avatar || "/default-avatar.png"} alt="avatar" />
+            )}
 
-            <MessageBubble isSender={m.isMine}>
-              {/* Render media (if any) — uses your message model "media" */}
-              {m.media && m.media.length > 0 &&
+            <MessageBubble
+              className="message-bubble"
+              data-id={m._id}
+              data-seenby={m.seenBy ? m.seenBy.join(",") : ""}
+              data-issender={String(m.isMine)}
+              isSender={m.isMine}
+            >
+              {/* Media attachments */}
+              {m.media?.length > 0 &&
                 m.media.map((file, i) =>
                   file.type === "image" ? (
-
-                    // If file.url is relative (starts with '/uploads/...') add server origin
-                    
-                   <FileImage key={i} src={resolveUrl(file.url)} alt={file.name} />
-
+                    <FileImage key={i} src={resolveUrl(file.url)} alt={file.name} />
                   ) : (
                     <FileLink
                       key={i}
-                      href={file.url.startsWith("http") ? file.url : `http://localhost:8000${file.url}`}
+                      href={resolveUrl(file.url)}
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -64,15 +101,22 @@ const resolveUrl = (url) => url.startsWith("http") ? url : `${SERVER_URL}${url.r
                   )
                 )}
 
-              {/* Render text part of the message */}
+              {/* Text message */}
               {m.text && <div>{m.text}</div>}
 
-              {/* Meta info (time and seen) */}
+              {/* Timestamp and seen mark */}
               <MetaInfo isSender={m.isMine}>
                 <TimeText>
-                  {new Date(m.createdAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(m.createdAt || Date.now()).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
                 </TimeText>
-                {m.isMine && <SeenMark seen={m.seen}>{m.seen ? "✓✓" : "✓"}</SeenMark>}
+                {m.isMine && (
+                  <SeenMark seen={hasOtherParticipantSeenMessage(m)}>
+                    {hasOtherParticipantSeenMessage(m) ? "✓✓" : "✓"}
+                  </SeenMark>
+                )}
               </MetaInfo>
             </MessageBubble>
           </MessageRow>
@@ -80,13 +124,13 @@ const resolveUrl = (url) => url.startsWith("http") ? url : `${SERVER_URL}${url.r
         <div ref={messagesEndRef} />
       </MessagesWrap>
 
-      {/* Message input — unchanged styling */}
+      {/* Input area */}
       <MessageInput onSend={handleSend} />
     </Container>
   );
 }
 
-// ---------------- Styled Components ----------------
+/* ---------------- Styled Components ---------------- */
 const Container = styled.div`
   display: flex;
   flex-direction: column;
@@ -159,17 +203,6 @@ const MessageBubble = styled.div`
   padding: 10px 14px;
   max-width: 70%;
   word-wrap: break-word;
-
-  &::after {
-    content: "";
-    position: absolute;
-    bottom: 0;
-    ${({ isSender }) => (isSender ? "right: -6px;" : "left: -6px;")}
-    width: 12px;
-    height: 12px;
-    background: ${({ isSender }) => (isSender ? "#2b5278" : "#182533")};
-    clip-path: polygon(0 100%, 100% 100%, 100% 0);
-  }
 `;
 
 const MetaInfo = styled.div`

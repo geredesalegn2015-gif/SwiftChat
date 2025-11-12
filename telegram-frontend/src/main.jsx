@@ -7,7 +7,12 @@ import { AuthProvider } from "./context/AuthProvider";
 import GlobalStyles from "./styles/GlobalStyles";
 //import "./index.css";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({ defaultOptions: {
+    queries: {
+      // staleTime: 60 * 1000,
+      staleTime: 0,
+    },
+  },});
 
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>

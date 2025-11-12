@@ -1,22 +1,9 @@
+// backend/socketHandler.js
 import Chat from "../models/chatModel.js";
+import Message from "../models/messageModel.js";
 import { sendMessageSocket } from "../controllers/messageController.js";
 import { Server } from "socket.io";
 
-/**
- * -----------------------------
- * Setup Socket.IO server
- * -----------------------------
- *
- * Note:
- * - This socket expects incoming events 'privateMessage' and 'groupMessage'
- *   to include mediaFiles as an array of uploaded-file metadata:
- *     [{ url, type, name, size }, ...]
- *   Because we upload files via HTTP first from the client (useChatWindow).
- *
- * - sendMessageSocket (in controllers) is written to accept either:
- *   - raw file objects (buffers/originalname) — legacy/socket-upload case, OR
- *   - uploaded metadata objects (url,type,name,size) — new flow.
- */
 export function setupSocket(server) {
   const io = new Server(server, {
     cors: {
@@ -25,112 +12,79 @@ export function setupSocket(server) {
     },
   });
 
-  // Map to track online users (userId -> socketId)
   const onlineUsers = new Map();
 
   io.on("connection", (socket) => {
-    console.log("Socket connected:", socket.id);
+    console.log("Connected:", socket.id);
 
-    // registerUser: client should call this after login, passing userId
     socket.on("registerUser", (userId) => {
       onlineUsers.set(userId, socket.id);
-      console.log(`Registered user: ${userId} -> ${socket.id}`);
+      console.log(`Registered: ${userId}`);
     });
 
-    /**
-     * PRIVATE MESSAGE
-     * Expected payload: { senderId, receiverId, text, mediaFiles }
-     * mediaFiles: an ARRAY of already-uploaded file metadata objects (url,type,name,size)
-     */
+    // --- Join/leave chat rooms ---
+    socket.on("joinChat", (chatId) => {
+      socket.join(chatId.toString());
+      console.log(`User joined chat: ${chatId}`);
+    });
+
+    socket.on("leaveChat", (chatId) => {
+      socket.leave(chatId.toString());
+      console.log(`User left chat: ${chatId}`);
+    });
+
+    // --- Private message ---
     socket.on("privateMessage", async ({ senderId, receiverId, text, mediaFiles }) => {
       try {
-        // find or create private chat
         let chat = await Chat.findOne({
           type: "private",
           participants: { $all: [senderId, receiverId], $size: 2 },
         });
         if (!chat) chat = await Chat.create({ type: "private", participants: [senderId, receiverId] });
 
-        // use sendMessageSocket helper --- it will accept mediaFiles that are either:
-        // - raw files (buffers etc.) or
-        // - already uploaded metadata objects (url,type,name,size)
         const message = await sendMessageSocket({ chatId: chat._id, senderId, text, mediaFiles });
 
-        // emit to receiver (if online)
         const receiverSocket = onlineUsers.get(receiverId);
         if (receiverSocket) io.to(receiverSocket).emit("newPrivateMessage", message);
 
-        // emit back to sender so their UI can receive the saved message from DB
-        // const senderSocket = onlineUsers.get(senderId);
-        // if (senderSocket) io.to(senderSocket).emit("newPrivateMessage", message);
-      } catch (error) {
-        console.error("Private message error:", error);
+        // Also emit to sender for consistency
+        const senderSocket = onlineUsers.get(senderId);
+        if (senderSocket) io.to(senderSocket).emit("newPrivateMessage", message);
+      } catch (err) {
+        console.error("Private message error:", err);
       }
     });
 
-    /**
-     * GROUP MESSAGE
-     * Expected payload: { senderId, groupId, text, mediaFiles }
-     */
+    // --- Group message ---
     socket.on("groupMessage", async ({ senderId, groupId, text, mediaFiles }) => {
       try {
-        const chat = await Chat.findOne({ _id: groupId, type: "group" }).populate("participants");
-        if (!chat) return console.log("Group not found", groupId);
+        const chat = await Chat.findById(groupId).populate("participants");
+        if (!chat) return;
 
-        // check membership
-        if (!chat.participants.some((p) => p._id.toString() === senderId)) {
-          return console.log("Sender not in group", senderId);
-        }
-
-        // send message (sendMessageSocket handles mediaFiles appropriately)
         const message = await sendMessageSocket({ chatId: groupId, senderId, text, mediaFiles });
 
-        // broadcast to members
         for (const member of chat.participants) {
           const memberSocket = onlineUsers.get(member._id.toString());
-          if (!memberSocket) continue;
-          io.to(memberSocket).emit("newGroupMessage", { groupId, message });
+          if (memberSocket) io.to(memberSocket).emit("newGroupMessage", { groupId, message });
         }
-      } catch (error) {
-        console.error("Group message error:", error);
+      } catch (err) {
+        console.error("Group message error:", err);
       }
     });
 
-    // remaining group join/leave/disconnect handlers kept unchanged...
-    socket.on("joinGroup", async ({ userId, groupId }) => {
+    // --- Mark message seen ---
+    socket.on("markMessageSeen", async ({ messageId, chatId, userId }) => {
       try {
-        const chat = await Chat.findById(groupId);
-        if (!chat) return console.log("Group not found.");
-        if (!chat.participants.includes(userId)) {
-          chat.participants.push(userId);
-          await chat.save();
-        }
-        socket.join(groupId);
-        console.log(`User ${userId} joined group ${groupId}`);
-        io.to(groupId).emit("groupMemberJoined", { userId, groupId });
-      } catch (error) {
-        console.error("Group join error:", error);
+        await Message.findByIdAndUpdate(messageId, { $addToSet: { seenBy: userId } });
+        io.to(chatId.toString()).emit("messageSeenUpdate", { messageId, userId });
+      } catch (err) {
+        console.error("markMessageSeen error:", err);
       }
     });
 
-    socket.on("leaveGroup", async ({ userId, groupId }) => {
-      try {
-        const chat = await Chat.findById(groupId);
-        if (!chat) return console.log("Group not found.");
-        chat.participants = chat.participants.filter((id) => id.toString() !== userId);
-        await chat.save();
-        socket.leave(groupId);
-        console.log(`User ${userId} left group ${groupId}`);
-        io.to(groupId).emit("groupMemberLeft", { userId, groupId });
-      } catch (error) {
-        console.error("Leave group error:", error);
-      }
-    });
-
-    // disconnect: remove from onlineUsers map
     socket.on("disconnect", () => {
-      for (const [userId, sockId] of onlineUsers.entries()) {
-        if (sockId === socket.id) {
+      for (const [userId, sid] of onlineUsers.entries()) {
+        if (sid === socket.id) {
           onlineUsers.delete(userId);
           console.log(`User disconnected: ${userId}`);
           break;

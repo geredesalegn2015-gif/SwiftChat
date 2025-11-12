@@ -179,6 +179,12 @@ export const sendMessageSocket = async ({ chatId, senderId, text, mediaFiles }) 
     sender: senderId,
     text: text || "",
     media,
+    // ✅ Added: include the sender in the 'seenBy' field
+    // Explanation:
+    // - When a user sends a message, they have already "seen" it by default.
+    // - Adding their user ID to 'seenBy' ensures consistency with the read/unread logic.
+    // - Other chat participants can later be added to 'seenBy' when they open the chat.
+    seenBy: [senderId],
   });
 
   // Update chat's lastMessage field (ObjectId only!)

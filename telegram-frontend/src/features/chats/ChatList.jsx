@@ -1,12 +1,34 @@
 import styled from "styled-components";
+import { useQueryClient } from "@tanstack/react-query";
+import { socket } from "../../hooks/useSocket";
 import { useChats } from "./useChats";
 import { useAuth } from "../../context/useAuth";
+import { Image as ImageIcon, FileText as FileIcon, Video as VideoIcon } from "lucide-react";
+import { useEffect } from "react";
 
 export default function ChatList({ selectedChat, onSelectChat, localChats = [] }) {
   const { data: chats = [], isLoading } = useChats();
+   const queryClient = useQueryClient();
   const { user } = useAuth();
-
   const allChats = [...localChats, ...chats];
+  
+  useEffect(() => {
+    // When new message arrives anywhere
+    const handleNewMessage = () => {
+      queryClient.invalidateQueries(["chats"]); // 🔄 refresh chat list
+    };
+
+    // Listen to both private and group messages
+    socket.on("newPrivateMessage", handleNewMessage);
+    socket.on("newGroupMessage", handleNewMessage);
+    socket.on("messageSeenUpdate", handleNewMessage);
+
+    return () => {
+      socket.off("newPrivateMessage", handleNewMessage);
+      socket.off("newGroupMessage", handleNewMessage);
+      socket.off("messageSeenUpdate", handleNewMessage);
+    };
+  }, [queryClient]);
 
   if (isLoading) return <Container>Loading chats...</Container>;
 
@@ -16,7 +38,7 @@ export default function ChatList({ selectedChat, onSelectChat, localChats = [] }
         <Empty>No chats yet</Empty>
       ) : (
         allChats.map((chat) => {
-          // 👤 Get display name and avatar
+          // 👤 Determine display name and avatar
           let displayName = chat.name || "Unknown";
           let avatar = displayName.charAt(0).toUpperCase();
 
@@ -28,7 +50,20 @@ export default function ChatList({ selectedChat, onSelectChat, localChats = [] }
             avatar = displayName.charAt(0).toUpperCase();
           }
 
-          const lastMsg = chat.lastMessage?.content || "No messages yet";
+          // 📨 Handle last message type
+          let lastMsg = "No messages yet";
+          if (chat.lastMessage) {
+            if (chat.lastMessage.media && chat.lastMessage.media.length > 0) {
+              const mediaType = chat.lastMessage.media[0].type;
+              if (mediaType.startsWith("image")) lastMsg = "📷 Photo";
+              else if (mediaType.startsWith("video")) lastMsg = "🎥 Video";
+              else lastMsg = "📎 File";
+            } else {
+              lastMsg = chat.lastMessage.text || "No messages yet";
+            }
+          }
+
+          // 🕒 Format time
           const time = chat.lastMessage?.createdAt
             ? new Date(chat.lastMessage.createdAt).toLocaleTimeString([], {
                 hour: "2-digit",
@@ -53,7 +88,27 @@ export default function ChatList({ selectedChat, onSelectChat, localChats = [] }
                 </TopRow>
 
                 <BottomRow>
-                  <LastMessage>{lastMsg}</LastMessage>
+                  <LastMessage>
+                    {lastMsg.startsWith("📷") ? (
+                      <IconRow>
+                        <ImageIcon size={15} />
+                        <span> Photo</span>
+                      </IconRow>
+                    ) : lastMsg.startsWith("🎥") ? (
+                      <IconRow>
+                        <VideoIcon size={15} />
+                        <span> Video</span>
+                      </IconRow>
+                    ) : lastMsg.startsWith("📎") ? (
+                      <IconRow>
+                        <FileIcon size={15} />
+                        <span> File</span>
+                      </IconRow>
+                    ) : (
+                      lastMsg
+                    )}
+                  </LastMessage>
+
                   {unreadCount > 0 && <Badge>{unreadCount}</Badge>}
                 </BottomRow>
               </ChatInfo>
@@ -160,6 +215,13 @@ const Badge = styled.div`
   display: flex;
   align-items: center;
   justify-content: center;
+`;
+
+const IconRow = styled.div`
+  display: flex;
+  align-items: center;
+  color: #9aa5b1;
+  gap: 4px;
 `;
 
 const Empty = styled.div`

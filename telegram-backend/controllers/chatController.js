@@ -1,24 +1,45 @@
 import Chat from "../models/chatModel.js";
 import catchAsync from "../utils/catchAsync.js";
 import AppError from "../utils/AppError.js";
-
+import Message from "../models/messageModel.js"
 
 // Get chats for current user
-export const getUserChats=catchAsync(async(req,res,next)=>{
-const userId=req.user._id;
-if(!userId) 
-  return next( new AppError("You are not logged in. Please login to get access.",401));
-const chats=await Chat.find({participants:userId})
-.populate("participants","fullName profilePic")
-.populate("lastMessage")
-.sort({updatedAt:-1});
-if(!chats) 
-  return next( new AppError("No chats found. Please create chat.",404));
-return res.status(200).json({
-  status:"success",
-  quantity:chats.length,
-  data:chats
-});
+export const getUserChats = catchAsync(async (req, res, next) => {
+  const userId = req.user._id;
+  if (!userId)
+    return next(new AppError("You are not logged in. Please login to get access.", 401));
+
+  // ✅ Fetch chats with participants + lastMessage populated
+  let chats = await Chat.find({ participants: userId })
+    .populate("participants", "fullName profilePic")
+    .populate({
+      path: "lastMessage",
+      select: "text media sender createdAt",
+      populate: { path: "sender", select: "fullName" },
+    })
+    .sort({ updatedAt: -1 });
+
+  if ( chats.length === 0)
+    return next(new AppError("No chats found. Please create chat.", 404));
+
+  // ✅ Add unread message count to each chat
+  const chatsWithUnread = await Promise.all(
+    chats.map(async (chat) => {
+      const unreadCount = await Message.countDocuments({
+        chat: chat._id,
+        seenBy: { $ne: userId },
+        sender: { $ne: userId },
+      });
+      return { ...chat.toObject(), unreadCount };
+    })
+  );
+  
+
+  return res.status(200).json({
+    status: "success",
+    quantity: chatsWithUnread?.length,
+    data:chatsWithUnread,
+  });
 });
 
 //////////////////////////////////////////////////////////////////
@@ -77,19 +98,54 @@ return res.status(200).json({
 
 /////////////////////////////////////////////////////////////////////
 
-export const accessPrivateChat=catchAsync(async(req,res,next)=>{
-  const {userId}=req.body; //other user
-  const me=req.user._id; // from protect midleware
-  console.log("userId me",userId,me)
-  let chat= await Chat.find({type:"private", participants:{$all:[userId,me],$size:2}});
-  console.log("Existing chat",chat)
-  
-  if(chat.length===0){
-    chat=await Chat.create({type:"private",participants:[userId,me]});
-    console.log("new chat",chat)
+export const accessPrivateChat = catchAsync(async (req, res, next) => {
+  const { userId } = req.body;
+  const me = req.user._id;
+
+  if (!userId) return next(new AppError("User ID required", 400));
+
+  // ✅ 1. Use findOne instead of find (returns single chat object)
+  let chat = await Chat.findOne({
+    type: "private",
+    participants: { $all: [userId, me], $size: 2 },
+  })
+    // ✅ 2. Fix populate typo and include text, media, and sender
+    .populate("participants", "fullName profilePic")
+    .populate({
+      path: "lastMessage",
+      select: "text media sender createdAt",
+      populate: { path: "sender", select: "fullName" },
+    });
+
+  // ✅ 3. Create new chat if not found
+  if (!chat) {
+    chat = await Chat.create({
+      type: "private",
+      participants: [userId, me],
+    });
+
+    // repopulate after creation
+    chat = await Chat.findById(chat._id).populate("participants", "fullName profilePic");
   }
-  return res.status(200).json({status:"success",data:chat});
-})
+
+  // ✅ 4. Calculate unread messages count for this user
+  const unreadCount = await Message.countDocuments({
+    chat: chat._id,
+    readBy: { $ne: me },
+    sender: { $ne: me },
+  });
+
+  // ✅ 5. Return a single clean object with unreadCount added
+  const formattedChat = {
+    ...chat.toObject(),
+    unreadCount,
+  };
+
+  return res.status(200).json({
+    status: "success",
+    data: formattedChat,
+  });
+});
 
 export const createGroupChat=catchAsync(async(req,res)=>{
   const {name,participants}=req.body;

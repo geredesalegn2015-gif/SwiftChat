@@ -1,30 +1,26 @@
+// hooks/useChatWindow.js
 import { useEffect, useState } from "react";
 import { socket } from "../../hooks/useSocket";
 import { useAuth } from "../../context/useAuth";
-import { getMessages,uploadMedia } from "../../services/apiMessages";
+import { getMessages, uploadMedia } from "../../services/apiMessages";
 
-/*
-  useChatWindow hook
-  - fetches messages for the selected chat
-  - listens for incoming socket messages
-  - handles sending messages:
-      * if files exist -> upload to server via HTTP (/api/upload)
-      * then emit socket event with text + uploaded file metadata only
-  This ensures sockets never carry raw file data.
-*/
-
+/**
+ * useChatWindow
+ * Handles:
+ * - Fetching chat messages
+ * - Real-time message send/receive via socket
+ * - Real-time "seen" updates
+ */
 export function useChatWindow(selectedChat) {
   const { user: currentUser, token } = useAuth();
   const [localMessages, setLocalMessages] = useState([]);
   const chatId = selectedChat?._id;
 
-  // ------------------ Fetch messages from backend ------------------
+  // --- Load chat messages from backend when chat changes ---
   useEffect(() => {
     if (!chatId) return;
-
-    async function loadMessages() {
+    async function load() {
       try {
-        // getMessages should return an array of message documents (matching your model)
         const res = await getMessages(chatId, token);
         const msgs = res.map((m) => {
           const senderId = typeof m.sender === "object" ? m.sender._id : m.sender;
@@ -32,99 +28,94 @@ export function useChatWindow(selectedChat) {
         });
         setLocalMessages(msgs);
       } catch (err) {
-        console.error("Failed to load messages:", err);
+        console.error("Load messages failed:", err);
       }
     }
+    load();
+  }, [chatId, token, currentUser?._id]);
 
-    loadMessages();
-  }, [chatId, currentUser?._id, token]);
-
-  // ------------------ Listen for incoming socket messages ------------------
+  // --- Join and leave chat room ---
   useEffect(() => {
     if (!chatId) return;
+    socket.emit("joinChat", chatId);
+    return () => socket.emit("leaveChat", chatId);
+  }, [chatId]);
 
-    const handleIncoming = (msg) => {
-      // msg may be a Mongoose document serialized from server (has .chat)
-      const senderId = typeof msg.sender === "object" ? msg.sender._id : msg.sender;
-
-      // Only append messages that belong to the currently open chat
+  // --- Listen for incoming messages ---
+  useEffect(() => {
+    const handlePrivate = (msg) => {
       if (msg.chat === chatId) {
-        setLocalMessages((prev) => [...prev, { ...msg, isMine: senderId === currentUser._id }]);
+        const senderId = typeof msg.sender === "object" ? msg.sender._id : msg.sender;
+        setLocalMessages((prev) => [
+          ...prev,
+          { ...msg, isMine: senderId === currentUser._id },
+        ]);
       }
     };
 
-    // server emits "newPrivateMessage" and "newGroupMessage" — listen to both
-    socket.on("newPrivateMessage", handleIncoming);
-    socket.on("newGroupMessage", handleIncoming);
+    socket.on("newPrivateMessage", handlePrivate);
+    socket.on("newGroupMessage", (data) => {
+      if (data.groupId === chatId) {
+        const senderId =
+          typeof data.message.sender === "object"
+            ? data.message.sender._id
+            : data.message.sender;
+        setLocalMessages((prev) => [
+          ...prev,
+          { ...data.message, isMine: senderId === currentUser._id },
+        ]);
+      }
+    });
 
     return () => {
-      socket.off("newPrivateMessage", handleIncoming);
-      socket.off("newGroupMessage", handleIncoming);
+      socket.off("newPrivateMessage", handlePrivate);
+      socket.off("newGroupMessage");
     };
   }, [chatId, currentUser?._id]);
 
-  // ------------------ Send message (text + optional files) ------------------
+  // --- Listen for message seen updates ---
+  useEffect(() => {
+    const handleSeenUpdate = ({ messageId, userId }) => {
+      setLocalMessages((prev) =>
+        prev.map((msg) =>
+          msg._id === messageId
+            ? { ...msg, seenBy: [...new Set([...(msg.seenBy || []), userId])] }
+            : msg
+        )
+      );
+    };
+    socket.on("messageSeenUpdate", handleSeenUpdate);
+    return () => socket.off("messageSeenUpdate", handleSeenUpdate);
+  }, []);
+
+  // --- Send message (text + optional files) ---
   const handleSend = async ({ text, files }) => {
     if (!selectedChat || (!text && (!files || files.length === 0))) return;
 
-    // Create optimistic UI message using local preview URLs for immediate feedback
-    const tempMessage = {
-      _id: `temp-${Date.now()}`,
-      sender: currentUser._id,
-      chat: selectedChat._id,
-      text: text || "",
-      media:
-        files?.map((file) => ({
-          name: file.name,
-          type: file.type ? file.type.split("/")[0] : "document",
-          size: file.size,
-          url: URL.createObjectURL(file), // browser preview until upload finishes
-        })) || [],
-      createdAt: new Date().toISOString(),
-      isMine: true,
-      type: files?.length > 0 ? "file" : "text",
-    };
-    setLocalMessages((prev) => [...prev, tempMessage]);
-
-    // -------------------------------
-    // 1) If there are files, upload them via HTTP first
-    //    The server route should return JSON: { files: [{ url, type, name, size }, ...] }
-    // -------------------------------
-  let uploadedFiles = [];
-if (files && files.length > 0) {
-  try {
-    const formData = new FormData();
-    files.forEach((f) => formData.append("mediaFiles", f));
-
-    // uploadMedia now returns { files: [...] }
-    const uploadRes = await uploadMedia(formData, token);
-    console.log("Upload response:", uploadRes);
-
-    // Pull files array reliably
-    uploadedFiles = uploadRes?.files || [];
-    if (!uploadedFiles.length) {
-      console.warn("Upload returned no files:", uploadRes);
+    let uploadedFiles = [];
+    if (files && files.length > 0) {
+      try {
+        const formData = new FormData();
+        files.forEach((f) => formData.append("mediaFiles", f));
+        const uploadRes = await uploadMedia(formData, token);
+        uploadedFiles = uploadRes?.files || [];
+      } catch (err) {
+        console.error("Upload failed:", err);
+        return;
+      }
     }
-  } catch (err) {
-    console.error("File upload error:", err);
-    return;
-  }
-}
 
-
-
-    // -------------------------------
-    // 2) Emit socket event with text + uploadedFiles (only metadata)
-    // -------------------------------
     if (selectedChat.type === "group") {
       socket.emit("groupMessage", {
         senderId: currentUser._id,
-        groupId: selectedChat._id,
+        groupId: chatId,
         text,
-        mediaFiles: uploadedFiles, // array of { url, type, name, size }
+        mediaFiles: uploadedFiles,
       });
     } else {
-      const receiverId = selectedChat.participants.find((p) => p._id !== currentUser._id)?._id;
+      const receiverId = selectedChat.participants.find(
+        (p) => p._id !== currentUser._id
+      )?._id;
       socket.emit("privateMessage", {
         senderId: currentUser._id,
         receiverId,
@@ -132,16 +123,9 @@ if (files && files.length > 0) {
         mediaFiles: uploadedFiles,
       });
     }
-
-    // -------------------------------
-    // 3) Optionally: store message via REST API (if your flow requires saving via REST)
-    //    In this implementation the server socket handler saves the message (sendMessageSocket),
-    //    so calling sendMessage() via API is optional. If you prefer server to save via REST,
-    //    call your sendMessage API here instead.
-    // -------------------------------
   };
 
-  return { localMessages, handleSend };
+  return { localMessages, handleSend, setLocalMessages };
 }
 
 export default useChatWindow;
