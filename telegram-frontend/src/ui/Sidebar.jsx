@@ -1,7 +1,7 @@
 // src/ui/Sidebar.jsx
 import styled from "styled-components";
 import TopBar from "./TopBar";
-import ChatList from "../features/chats/ChatList";
+import ChatList from "../features/chats/ChatList2";
 import { useState } from "react";
 
 export default function Sidebar({ selectedChat, onSelectChat, onToggleDrawer }) {

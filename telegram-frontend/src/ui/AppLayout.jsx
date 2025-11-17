@@ -3,7 +3,7 @@ import { useState } from "react";
 import styled from "styled-components";
 import SidebarDrawer from "./SidebarDrawer";
 import Sidebar from "./Sidebar";
-import ChatWindow from "../features/chats/ChatWindow";
+import ChatWindow from "../features/chats/ChatWindow2";
 
 export default function AppLayout() {
   const [drawerOpen, setDrawerOpen] = useState(false);

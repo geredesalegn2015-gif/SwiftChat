@@ -3,13 +3,14 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import AppLayout from "./ui/AppLayout";
+import { setAuthToken } from "./services/apiClient";
 import { useAuth } from "./hooks/useAuth"; // custom hook for auth state
 // src/App.jsx
 import { useEffect } from "react";
 import { initSocket } from "./hooks/useSocket";
 
 export default function App() {
-  const { user } = useAuth(); // get currently logged-in user from context or local state
+  const { user,token } = useAuth(); // get currently logged-in user from context or local state
 
    useEffect(() => {
     let cleanup;
@@ -19,6 +20,7 @@ export default function App() {
 
     return () => cleanup && cleanup(); // disconnect on unmount
   }, [user?._id]);
+  if (token) setAuthToken(token);
   return (
     <Routes>
       {/* Protected routes: accessible only if user is logged in */}

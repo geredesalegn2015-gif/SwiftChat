@@ -5,7 +5,9 @@
 import dotenv from "dotenv";
 import http from "http";
 import app from "./app.js";
-import {setupSocket} from "./controllers/socketHandler.js"
+// import {setupSocket} from "./controllers/socketHandler.js"
+import {setupSocket} from "./socket/socketServer.js"
+
 import connectDB from "./config/db.js"
 // Load environment variables
 dotenv.config({ path: "./.env" });
