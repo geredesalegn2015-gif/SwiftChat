@@ -22,7 +22,6 @@ export default function ChatWindow({ selectedChat }) {
   const {
     localMessages,
     handleSend,
-    setLocalMessages,
     typingUsers,
     startTyping,
     stopTyping,
@@ -32,7 +31,7 @@ export default function ChatWindow({ selectedChat }) {
   const messagesEndRef = useRef(null);
 
   // Observe message bubbles for "seen" events
-  useMessageSeenObserver(selectedChat, localMessages, currentUser, setLocalMessages);
+  useMessageSeenObserver(selectedChat, localMessages, currentUser);
 
   // Scroll only when new messages arrive (not on initial chat switch)
   const hasMounted = useRef(false);
